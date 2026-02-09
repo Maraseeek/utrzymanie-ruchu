@@ -1278,4 +1278,4 @@ elif view == "📊 Historia":
 
 # --- FOOTER ---
 st.markdown("---")
-st.caption("🔧 Warsztat Ziołolek - System Utrzymania Ruchu | Powered by Claude | © 2025")
+st.caption("🔧 Warsztat Ziołolek - System Utrzymania Ruchu | 2026")
