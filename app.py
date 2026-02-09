@@ -4,14 +4,19 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 import json
+import os
 
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(
-    page_title="UR System Pro", 
+    page_title="Warsztat Ziołolek", 
     page_icon="⚙️", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# --- KONFIGURACJA PLIKU DANYCH ---
+DB_FILE = "database.json"
+HIST_FILE = "history.json"
 
 # --- ZAAWANSOWANE STYLE CSS ---
 st.markdown("""
@@ -447,11 +452,39 @@ def get_initial_data():
         ]
     }
 
+# --- SYSTEM ZAPISU I ODCZYTU (Persistence) ---
+def load_data():
+    """Wczytuje dane z pliku JSON lub zwraca dane początkowe"""
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return get_initial_data()
+    return get_initial_data()
+
+def load_history():
+    """Wczytuje historię z pliku JSON"""
+    if os.path.exists(HIST_FILE):
+        try:
+            with open(HIST_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_data():
+    """Zapisuje aktualny stan sesji do plików JSON"""
+    with open(DB_FILE, 'w', encoding='utf-8') as f:
+        json.dump(st.session_state.data, f, indent=4, ensure_ascii=False)
+    with open(HIST_FILE, 'w', encoding='utf-8') as f:
+        json.dump(st.session_state.history, f, indent=4, ensure_ascii=False)
+
 # Inicjalizacja danych
 if 'data' not in st.session_state:
-    st.session_state.data = get_initial_data()
+    st.session_state.data = load_data()
 if 'history' not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = load_history()
 
 # --- FUNKCJE OPERACYJNE ---
 def add_cycle(machine_id, cycles):
@@ -469,6 +502,7 @@ def add_cycle(machine_id, cycles):
                 "action": f"Dodano {cycles} cykli",
                 "user": "System"
             })
+            save_data() # ZAPIS
             break
 
 def reset_service_interval(machine_id, interval_name):
@@ -487,6 +521,7 @@ def reset_service_interval(machine_id, interval_name):
                         "action": f"Wykonano: {interval_name}",
                         "user": "System"
                     })
+                    save_data() # ZAPIS
                     break
             break
 
@@ -506,7 +541,7 @@ def get_machine_critical_status(machine):
     return max_status, critical_intervals
 
 # --- SIDEBAR ---
-st.sidebar.markdown("### ⚙️ UR SYSTEM PRO")
+st.sidebar.markdown("### ⚙️ WARSZTAT ZIOŁOLEK")
 st.sidebar.markdown("#### System Utrzymania Ruchu")
 st.sidebar.markdown("---")
 
@@ -815,6 +850,7 @@ elif view == "⚙️ Konfiguracja":
                 
                 if st.button(f"🗑️ Usuń maszynę", key=f"del_machine_{idx}"):
                     st.session_state.data['machines'].pop(idx)
+                    save_data() # ZAPIS
                     st.success("Usunięto maszynę")
                     st.rerun()
         
@@ -830,6 +866,7 @@ elif view == "⚙️ Konfiguracja":
                 "avg_daily_cycles": 10,
                 "service_intervals": []
             })
+            save_data() # ZAPIS
             st.rerun()
     
     with tab2:
@@ -862,6 +899,7 @@ elif view == "⚙️ Konfiguracja":
                 
                 if st.button(f"🗑️ Usuń interwał", key=f"del_int_{machine['id']}_{idx}"):
                     machine['service_intervals'].pop(idx)
+                    save_data() # ZAPIS
                     st.success("Usunięto interwał")
                     st.rerun()
         
@@ -889,6 +927,7 @@ elif view == "⚙️ Konfiguracja":
                     "last_service": str(datetime.now().date()),
                     "enabled": True
                 })
+                save_data() # ZAPIS
                 st.success("Dodano nowy interwał")
                 st.rerun()
 
@@ -904,10 +943,11 @@ elif view == "📊 Historia":
         
         if st.button("🗑️ Wyczyść historię"):
             st.session_state.history = []
+            save_data() # ZAPIS
             st.rerun()
     else:
         st.info("Brak zapisanych operacji w historii")
 
 # --- FOOTER ---
 st.markdown("---")
-st.caption("UR System Pro v2.0 | Powered by Claude | © 2025")
+st.caption("Warsztat Ziołolek v2.0 | Powered by Gemini | © 2025")
