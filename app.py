@@ -5,18 +5,15 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional
 import json
 import os
+from pathlib import Path
 
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(
     page_title="Warsztat Ziołolek", 
-    page_icon="⚙️", 
+    page_icon="🔧", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# --- KONFIGURACJA PLIKU DANYCH ---
-DB_FILE = "database.json"
-HIST_FILE = "history.json"
 
 # --- ZAAWANSOWANE STYLE CSS ---
 st.markdown("""
@@ -387,6 +384,120 @@ def add_months(source_date, months):
     day = min(source_date.day, [31,29,31,30,31,30,31,31,30,31,30,31][month-1])
     return source_date.replace(year=year, month=month, day=day)
 
+# --- SYSTEM ZAPISU DANYCH (PERSISTENCE) ---
+DATA_DIR = Path("warsztat_data")
+DATABASE_FILE = DATA_DIR / "database.json"
+HISTORY_FILE = DATA_DIR / "history.json"
+BACKUP_DIR = DATA_DIR / "backups"
+
+def ensure_data_directory():
+    """Tworzy katalog na dane jeśli nie istnieje"""
+    DATA_DIR.mkdir(exist_ok=True)
+    BACKUP_DIR.mkdir(exist_ok=True)
+
+def create_backup():
+    """Tworzy kopię zapasową bazy danych"""
+    try:
+        if DATABASE_FILE.exists():
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_file = BACKUP_DIR / f"database_backup_{timestamp}.json"
+            
+            with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            with open(backup_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            # Zachowaj tylko 10 ostatnich backupów
+            backups = sorted(BACKUP_DIR.glob("database_backup_*.json"))
+            if len(backups) > 10:
+                for old_backup in backups[:-10]:
+                    old_backup.unlink()
+            
+            return True
+    except Exception as e:
+        st.error(f"Błąd tworzenia backupu: {e}")
+        return False
+
+def save_database(data):
+    """Zapisuje bazę danych do pliku JSON"""
+    try:
+        ensure_data_directory()
+        
+        # Walidacja danych przed zapisem
+        if not isinstance(data, dict) or 'machines' not in data:
+            st.error("Nieprawidłowa struktura danych!")
+            return False
+        
+        # Zapisz dane
+        with open(DATABASE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        return True
+    except Exception as e:
+        st.error(f"Błąd zapisu bazy danych: {e}")
+        return False
+
+def load_database():
+    """Wczytuje bazę danych z pliku JSON lub tworzy nową"""
+    try:
+        ensure_data_directory()
+        
+        if DATABASE_FILE.exists():
+            with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Walidacja struktury
+            if isinstance(data, dict) and 'machines' in data:
+                return data
+            else:
+                st.warning("Nieprawidłowa struktura pliku database.json - tworzę nową bazę")
+                return get_initial_data()
+        else:
+            # Pierwsza inicjalizacja - utwórz bazę
+            initial_data = get_initial_data()
+            save_database(initial_data)
+            return initial_data
+            
+    except json.JSONDecodeError:
+        st.error("Błąd odczytu database.json - plik uszkodzony. Tworzę nową bazę.")
+        return get_initial_data()
+    except Exception as e:
+        st.error(f"Błąd wczytywania bazy danych: {e}")
+        return get_initial_data()
+
+def save_history(history):
+    """Zapisuje historię operacji do pliku JSON"""
+    try:
+        ensure_data_directory()
+        
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
+        
+        return True
+    except Exception as e:
+        st.error(f"Błąd zapisu historii: {e}")
+        return False
+
+def load_history():
+    """Wczytuje historię operacji z pliku JSON"""
+    try:
+        ensure_data_directory()
+        
+        if HISTORY_FILE.exists():
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+            return history if isinstance(history, list) else []
+        else:
+            return []
+            
+    except json.JSONDecodeError:
+        st.warning("Błąd odczytu history.json - tworzę nową historię")
+        return []
+    except Exception as e:
+        st.error(f"Błąd wczytywania historii: {e}")
+        return []
+
 def get_status_color(status):
     """Zwraca kolor dla statusu"""
     colors = {0: "#22c55e", 1: "#fbbf24", 2: "#ef4444"}
@@ -452,39 +563,13 @@ def get_initial_data():
         ]
     }
 
-# --- SYSTEM ZAPISU I ODCZYTU (Persistence) ---
-def load_data():
-    """Wczytuje dane z pliku JSON lub zwraca dane początkowe"""
-    if os.path.exists(DB_FILE):
-        try:
-            with open(DB_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return get_initial_data()
-    return get_initial_data()
-
-def load_history():
-    """Wczytuje historię z pliku JSON"""
-    if os.path.exists(HIST_FILE):
-        try:
-            with open(HIST_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return []
-    return []
-
-def save_data():
-    """Zapisuje aktualny stan sesji do plików JSON"""
-    with open(DB_FILE, 'w', encoding='utf-8') as f:
-        json.dump(st.session_state.data, f, indent=4, ensure_ascii=False)
-    with open(HIST_FILE, 'w', encoding='utf-8') as f:
-        json.dump(st.session_state.history, f, indent=4, ensure_ascii=False)
-
-# Inicjalizacja danych
+# Inicjalizacja danych z automatycznym zapisem/odczytem
 if 'data' not in st.session_state:
-    st.session_state.data = load_data()
+    st.session_state.data = load_database()
 if 'history' not in st.session_state:
     st.session_state.history = load_history()
+if 'unsaved_changes' not in st.session_state:
+    st.session_state.unsaved_changes = False
 
 # --- FUNKCJE OPERACYJNE ---
 def add_cycle(machine_id, cycles):
@@ -502,7 +587,10 @@ def add_cycle(machine_id, cycles):
                 "action": f"Dodano {cycles} cykli",
                 "user": "System"
             })
-            save_data() # ZAPIS
+            
+            # Automatyczny zapis
+            save_database(st.session_state.data)
+            save_history(st.session_state.history)
             break
 
 def reset_service_interval(machine_id, interval_name):
@@ -521,7 +609,10 @@ def reset_service_interval(machine_id, interval_name):
                         "action": f"Wykonano: {interval_name}",
                         "user": "System"
                     })
-                    save_data() # ZAPIS
+                    
+                    # Automatyczny zapis
+                    save_database(st.session_state.data)
+                    save_history(st.session_state.history)
                     break
             break
 
@@ -541,7 +632,7 @@ def get_machine_critical_status(machine):
     return max_status, critical_intervals
 
 # --- SIDEBAR ---
-st.sidebar.markdown("### ⚙️ WARSZTAT ZIOŁOLEK")
+st.sidebar.markdown("### 🔧 WARSZTAT ZIOŁOLEK")
 st.sidebar.markdown("#### System Utrzymania Ruchu")
 st.sidebar.markdown("---")
 
@@ -573,6 +664,21 @@ if warning_count > 0:
     st.sidebar.warning(f"⚠️ Ostrzeżenia: {warning_count}")
 if critical_count == 0 and warning_count == 0:
     st.sidebar.success(f"✅ Wszystko OK")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("#### 💾 SYSTEM ZAPISU")
+if DATABASE_FILE.exists():
+    file_time = datetime.fromtimestamp(DATABASE_FILE.stat().st_mtime)
+    st.sidebar.caption(f"Ostatni zapis: {file_time.strftime('%d.%m %H:%M')}")
+else:
+    st.sidebar.caption("Brak zapisanej bazy")
+
+# Przycisk tworzenia backupu
+if st.sidebar.button("📦 Utwórz Backup", use_container_width=True):
+    if create_backup():
+        st.sidebar.success("✅ Backup utworzony!")
+    else:
+        st.sidebar.error("❌ Błąd backupu")
 
 # --- WIDOK 1: PANEL GŁÓWNY ---
 if view == "🏠 Panel Główny":
@@ -831,7 +937,39 @@ elif view == "🔧 Karta Maszyny":
 elif view == "⚙️ Konfiguracja":
     st.title("KONFIGURACJA SYSTEMU")
     
-    tab1, tab2 = st.tabs(["🏭 Zarządzanie maszynami", "🔧 Interwały serwisowe"])
+    # Ostrzeżenie o niezapisanych zmianach
+    if st.session_state.unsaved_changes:
+        st.warning("⚠️ **Masz niezapisane zmiany!** Kliknij 'Zapisz zmiany' aby je zachować.")
+    
+    # Przyciski akcji na górze
+    col_save, col_backup, col_reset = st.columns(3)
+    
+    with col_save:
+        if st.button("💾 Zapisz zmiany", type="primary", use_container_width=True):
+            if save_database(st.session_state.data):
+                st.session_state.unsaved_changes = False
+                st.success("✅ Zmiany zapisane pomyślnie!")
+                st.rerun()
+            else:
+                st.error("❌ Błąd zapisu!")
+    
+    with col_backup:
+        if st.button("📦 Backup przed zmianami", use_container_width=True):
+            if create_backup():
+                st.success("✅ Backup utworzony!")
+            else:
+                st.error("❌ Błąd backupu!")
+    
+    with col_reset:
+        if st.button("🔄 Odśwież dane", use_container_width=True):
+            st.session_state.data = load_database()
+            st.session_state.unsaved_changes = False
+            st.success("✅ Dane odświeżone!")
+            st.rerun()
+    
+    st.markdown("---")
+    
+    tab1, tab2, tab3 = st.tabs(["🏭 Zarządzanie maszynami", "🔧 Interwały serwisowe", "📁 Zarządzanie plikami"])
     
     with tab1:
         st.subheader("Lista maszyn")
@@ -841,32 +979,72 @@ elif view == "⚙️ Konfiguracja":
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    machine['name'] = st.text_input("Nazwa", machine['name'], key=f"name_{idx}")
-                    machine['location'] = st.text_input("Lokalizacja", machine['location'], key=f"loc_{idx}")
+                    new_name = st.text_input("Nazwa", machine['name'], key=f"name_{idx}")
+                    new_location = st.text_input("Lokalizacja", machine['location'], key=f"loc_{idx}")
+                    
+                    if new_name != machine['name']:
+                        machine['name'] = new_name
+                        st.session_state.unsaved_changes = True
+                    if new_location != machine['location']:
+                        machine['location'] = new_location
+                        st.session_state.unsaved_changes = True
                 
                 with col2:
-                    machine['model'] = st.text_input("Model", machine['model'], key=f"model_{idx}")
-                    machine['avg_daily_cycles'] = st.number_input("Średnia dzienna cykli", machine['avg_daily_cycles'], key=f"avg_{idx}")
+                    new_model = st.text_input("Model", machine['model'], key=f"model_{idx}")
+                    new_avg = st.number_input("Średnia dzienna cykli", machine['avg_daily_cycles'], key=f"avg_{idx}")
+                    
+                    if new_model != machine['model']:
+                        machine['model'] = new_model
+                        st.session_state.unsaved_changes = True
+                    if new_avg != machine['avg_daily_cycles']:
+                        machine['avg_daily_cycles'] = new_avg
+                        st.session_state.unsaved_changes = True
                 
                 if st.button(f"🗑️ Usuń maszynę", key=f"del_machine_{idx}"):
-                    st.session_state.data['machines'].pop(idx)
-                    save_data() # ZAPIS
-                    st.success("Usunięto maszynę")
-                    st.rerun()
+                    if len(st.session_state.data['machines']) > 1:
+                        deleted_name = machine['name']
+                        st.session_state.data['machines'].pop(idx)
+                        save_database(st.session_state.data)
+                        
+                        # Dodaj do historii
+                        st.session_state.history.insert(0, {
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "machine": deleted_name,
+                            "action": "Usunięto maszynę z systemu",
+                            "user": "System"
+                        })
+                        save_history(st.session_state.history)
+                        
+                        st.success(f"Usunięto maszynę: {deleted_name}")
+                        st.rerun()
+                    else:
+                        st.error("Nie możesz usunąć ostatniej maszyny!")
         
         st.markdown("---")
         
         if st.button("➕ Dodaj nową maszynę", type="primary"):
             new_id = f"M{len(st.session_state.data['machines'])+1:02d}"
-            st.session_state.data['machines'].append({
+            new_machine = {
                 "id": new_id,
                 "name": f"Nowa maszyna {new_id}",
                 "location": "Hala X",
                 "model": "Model",
                 "avg_daily_cycles": 10,
                 "service_intervals": []
+            }
+            st.session_state.data['machines'].append(new_machine)
+            save_database(st.session_state.data)
+            
+            # Dodaj do historii
+            st.session_state.history.insert(0, {
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "machine": new_machine['name'],
+                "action": "Dodano nową maszynę do systemu",
+                "user": "System"
             })
-            save_data() # ZAPIS
+            save_history(st.session_state.history)
+            
+            st.success("Dodano nową maszynę!")
             st.rerun()
     
     with tab2:
@@ -884,22 +1062,54 @@ elif view == "⚙️ Konfiguracja":
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    interval_data['name'] = st.text_input("Nazwa interwału", interval_data['name'], key=f"int_name_{machine['id']}_{idx}")
-                    interval_data['enabled'] = st.checkbox("Włączony", interval_data['enabled'], key=f"int_en_{machine['id']}_{idx}")
+                    new_int_name = st.text_input("Nazwa interwału", interval_data['name'], key=f"int_name_{machine['id']}_{idx}")
+                    new_enabled = st.checkbox("Włączony", interval_data['enabled'], key=f"int_en_{machine['id']}_{idx}")
+                    
+                    if new_int_name != interval_data['name']:
+                        interval_data['name'] = new_int_name
+                        st.session_state.unsaved_changes = True
+                    if new_enabled != interval_data['enabled']:
+                        interval_data['enabled'] = new_enabled
+                        st.session_state.unsaved_changes = True
                 
                 with col2:
-                    interval_data['type'] = st.selectbox("Typ", ['cycles', 'time'], index=0 if interval_data['type']=='cycles' else 1, key=f"int_type_{machine['id']}_{idx}")
-                    interval_data['interval'] = st.number_input("Interwał" + (" (cykle)" if interval_data['type']=='cycles' else " (miesiące)"), 
-                                                                 interval_data['interval'], key=f"int_val_{machine['id']}_{idx}")
+                    new_type = st.selectbox("Typ", ['cycles', 'time'], index=0 if interval_data['type']=='cycles' else 1, key=f"int_type_{machine['id']}_{idx}")
+                    new_interval = st.number_input("Interwał" + (" (cykle)" if interval_data['type']=='cycles' else " (miesiące)"), 
+                                                                 interval_data['interval'], min_value=1, key=f"int_val_{machine['id']}_{idx}")
+                    
+                    if new_type != interval_data['type']:
+                        interval_data['type'] = new_type
+                        st.session_state.unsaved_changes = True
+                    if new_interval != interval_data['interval']:
+                        interval_data['interval'] = new_interval
+                        st.session_state.unsaved_changes = True
                 
                 with col3:
-                    interval_data['current_value'] = st.number_input("Bieżąca wartość", interval_data['current_value'], key=f"int_cur_{machine['id']}_{idx}")
-                    interval_data['last_service'] = st.date_input("Ostatni serwis", datetime.strptime(interval_data['last_service'], "%Y-%m-%d").date(), 
+                    new_current = st.number_input("Bieżąca wartość", interval_data['current_value'], min_value=0, key=f"int_cur_{machine['id']}_{idx}")
+                    new_last = st.date_input("Ostatni serwis", datetime.strptime(interval_data['last_service'], "%Y-%m-%d").date(), 
                                                                    key=f"int_date_{machine['id']}_{idx}").strftime("%Y-%m-%d")
+                    
+                    if new_current != interval_data['current_value']:
+                        interval_data['current_value'] = new_current
+                        st.session_state.unsaved_changes = True
+                    if new_last != interval_data['last_service']:
+                        interval_data['last_service'] = new_last
+                        st.session_state.unsaved_changes = True
                 
                 if st.button(f"🗑️ Usuń interwał", key=f"del_int_{machine['id']}_{idx}"):
+                    deleted_interval = interval_data['name']
                     machine['service_intervals'].pop(idx)
-                    save_data() # ZAPIS
+                    save_database(st.session_state.data)
+                    
+                    # Dodaj do historii
+                    st.session_state.history.insert(0, {
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "machine": machine['name'],
+                        "action": f"Usunięto interwał: {deleted_interval}",
+                        "user": "System"
+                    })
+                    save_history(st.session_state.history)
+                    
                     st.success("Usunięto interwał")
                     st.rerun()
         
@@ -914,22 +1124,141 @@ elif view == "⚙️ Konfiguracja":
         with col_b:
             new_int_type = st.selectbox("Typ", ['cycles', 'time'])
         with col_c:
-            new_int_interval = st.number_input("Interwał", 1)
+            new_int_interval = st.number_input("Interwał", 1, min_value=1)
         with col_d:
             st.write("")
             st.write("")
             if st.button("➕ Dodaj interwał", type="primary"):
-                machine['service_intervals'].append({
+                new_interval = {
                     "name": new_int_name,
                     "type": new_int_type,
                     "interval": new_int_interval,
                     "current_value": 0,
                     "last_service": str(datetime.now().date()),
                     "enabled": True
+                }
+                machine['service_intervals'].append(new_interval)
+                save_database(st.session_state.data)
+                
+                # Dodaj do historii
+                st.session_state.history.insert(0, {
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "machine": machine['name'],
+                    "action": f"Dodano interwał: {new_int_name}",
+                    "user": "System"
                 })
-                save_data() # ZAPIS
+                save_history(st.session_state.history)
+                
                 st.success("Dodano nowy interwał")
                 st.rerun()
+    
+    with tab3:
+        st.subheader("Zarządzanie plikami danych")
+        
+        col_info1, col_info2 = st.columns(2)
+        
+        with col_info1:
+            st.markdown("#### 📊 Baza danych")
+            if DATABASE_FILE.exists():
+                file_size = DATABASE_FILE.stat().st_size
+                file_time = datetime.fromtimestamp(DATABASE_FILE.stat().st_mtime)
+                st.info(f"**Plik:** `{DATABASE_FILE}`\n\n**Rozmiar:** {file_size} bajtów\n\n**Ostatnia modyfikacja:** {file_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                
+                # Podgląd zawartości
+                with st.expander("👁️ Podgląd JSON"):
+                    with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
+                        st.code(f.read(), language='json')
+                
+                # Pobieranie pliku
+                with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
+                    st.download_button(
+                        label="📥 Pobierz database.json",
+                        data=f.read(),
+                        file_name=f"database_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+            else:
+                st.warning("Plik database.json nie istnieje")
+        
+        with col_info2:
+            st.markdown("#### 📜 Historia")
+            if HISTORY_FILE.exists():
+                file_size = HISTORY_FILE.stat().st_size
+                file_time = datetime.fromtimestamp(HISTORY_FILE.stat().st_mtime)
+                st.info(f"**Plik:** `{HISTORY_FILE}`\n\n**Rozmiar:** {file_size} bajtów\n\n**Ostatnia modyfikacja:** {file_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                
+                # Pobieranie pliku
+                with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                    st.download_button(
+                        label="📥 Pobierz history.json",
+                        data=f.read(),
+                        file_name=f"history_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+            else:
+                st.warning("Plik history.json nie istnieje")
+        
+        st.markdown("---")
+        
+        st.markdown("#### 📦 Kopie zapasowe")
+        
+        backups = sorted(BACKUP_DIR.glob("database_backup_*.json"), reverse=True)
+        
+        if backups:
+            st.info(f"Znaleziono {len(backups)} kopii zapasowych")
+            
+            for backup in backups[:5]:  # Pokaż tylko 5 ostatnich
+                backup_time = datetime.strptime(backup.stem.replace("database_backup_", ""), "%Y%m%d_%H%M%S")
+                col_b1, col_b2, col_b3 = st.columns([3, 1, 1])
+                
+                col_b1.caption(f"📦 {backup_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                
+                with open(backup, 'r', encoding='utf-8') as f:
+                    col_b2.download_button(
+                        label="📥",
+                        data=f.read(),
+                        file_name=backup.name,
+                        mime="application/json",
+                        key=f"download_{backup.name}"
+                    )
+                
+                if col_b3.button("♻️", key=f"restore_{backup.name}"):
+                    # Przywróć backup
+                    with open(backup, 'r', encoding='utf-8') as f:
+                        restored_data = json.load(f)
+                    
+                    st.session_state.data = restored_data
+                    save_database(restored_data)
+                    
+                    st.success(f"Przywrócono backup z {backup_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                    st.rerun()
+        else:
+            st.warning("Brak kopii zapasowych")
+        
+        st.markdown("---")
+        
+        # Niebezpieczne operacje
+        with st.expander("⚠️ OPERACJE NIEBEZPIECZNE", expanded=False):
+            st.error("**UWAGA!** Te operacje są nieodwracalne!")
+            
+            col_d1, col_d2 = st.columns(2)
+            
+            with col_d1:
+                if st.button("🗑️ Wyczyść całą bazę danych", type="secondary"):
+                    create_backup()  # Najpierw backup
+                    st.session_state.data = get_initial_data()
+                    save_database(st.session_state.data)
+                    st.warning("Baza danych wyczyszczona! Utworzono backup.")
+                    st.rerun()
+            
+            with col_d2:
+                if st.button("🗑️ Wyczyść historię", type="secondary"):
+                    st.session_state.history = []
+                    save_history([])
+                    st.warning("Historia wyczyszczona!")
+                    st.rerun()
 
 # --- WIDOK 4: HISTORIA ---
 elif view == "📊 Historia":
@@ -943,11 +1272,10 @@ elif view == "📊 Historia":
         
         if st.button("🗑️ Wyczyść historię"):
             st.session_state.history = []
-            save_data() # ZAPIS
             st.rerun()
     else:
         st.info("Brak zapisanych operacji w historii")
 
 # --- FOOTER ---
 st.markdown("---")
-st.caption("Warsztat Ziołolek v2.0 | Powered by Gemini | © 2025")
+st.caption("🔧 Warsztat Ziołolek - System Utrzymania Ruchu | Powered by Claude | © 2025")
