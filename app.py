@@ -1,32 +1,64 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-import os
 
 # --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="UR Manager", page_icon="🛠️", layout="wide")
+st.set_page_config(page_title="UR System", page_icon="⚙️", layout="wide")
 
-# --- STYLE CSS (Dla ładniejszego wyglądu) ---
+# --- STYLE CSS (INDUSTRIAL DARK THEME) ---
 st.markdown("""
     <style>
-    .stMetric {
-        background-color: #f0f2f6;
-        padding: 10px;
-        border-radius: 10px;
+    /* Ogólne tło aplikacji */
+    .stApp {
+        background-color: #0e1117;
     }
-    .status-card {
+    
+    /* Stylizacja Metryk (Liczników) - Naprawa białego tła */
+    div[data-testid="stMetric"] {
+        background-color: #262730; /* Ciemny grafit */
+        border: 1px solid #41444e; /* Stalowa ramka */
         padding: 15px;
-        border-radius: 10px;
-        margin-bottom: 10px;
-        border: 1px solid #ddd;
+        border-radius: 4px; /* Bardziej kanciaste - techniczne */
+        color: #ffffff;
     }
-    .critical { border-left: 5px solid #ff4b4b; background-color: #fff5f5; }
-    .warning { border-left: 5px solid #ffa421; background-color: #fffae5; }
-    .ok { border-left: 5px solid #21c354; background-color: #f0fff4; }
+    
+    div[data-testid="stMetricLabel"] {
+        color: #a3a8b8 !important; /* Szary techniczny dla etykiet */
+        font-size: 0.9rem;
+    }
+
+    div[data-testid="stMetricValue"] {
+        color: #ffffff !important;
+        font-family: 'Roboto Mono', monospace; /* Czcionka techniczna */
+    }
+
+    /* Karty maszyn na Dashboardzie */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background-color: #1c1e24;
+        border-radius: 4px;
+        padding: 10px;
+    }
+
+    /* Pasek postępu - zmiana kolorów */
+    .stProgress > div > div > div > div {
+        background-color: #4a90e2; /* Stalowy niebieski */
+    }
+
+    /* Przyciski - styl roboczy */
+    button {
+        border-radius: 4px !important;
+        font-weight: 600 !important;
+    }
+    
+    /* Nagłówki tabel */
+    th {
+        background-color: #262730 !important;
+        color: #a3a8b8 !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- DANE STARTOWE (JEŚLI BRAK PLIKU) ---
+# --- DANE STARTOWE ---
 def get_initial_data():
     return pd.DataFrame([
         {
@@ -46,14 +78,10 @@ def get_initial_data():
         }
     ])
 
-# --- OBSŁUGA DANYCH (SESSION STATE - PAMIĘĆ TYMCZASOWA) ---
-# Uwaga: W wersji darmowej chmurowej dane resetują się po restarcie aplikacji. 
-# Do trwałego zapisu należałoby podpiąć Google Sheets, tutaj wersja uproszczona na pliku CSV/Pamięci.
-
 if 'df' not in st.session_state:
     st.session_state.df = get_initial_data()
 
-# Funkcje pomocnicze dat
+# Funkcje pomocnicze
 def str_to_date(date_str):
     return datetime.strptime(date_str, "%Y-%m-%d").date()
 
@@ -63,168 +91,201 @@ def add_months(source_date, months):
     month = month % 12 + 1
     return source_date.replace(year=year, month=month)
 
-# --- PANEL GŁÓWNY (SIDEBAR) ---
-st.sidebar.title("🔧 Menu Główne")
-view = st.sidebar.radio("Wybierz widok:", ["Dashboard", "Szczegóły Maszyny", "Ustawienia"])
+# --- PANEL BOCZNY (MENU) ---
+st.sidebar.header("SYSTEM UTRZYMANIA RUCHU")
+st.sidebar.markdown("---")
+view = st.sidebar.radio("Nawigacja:", ["Panel Główny", "Karta Maszyny", "Baza Danych"], label_visibility="collapsed")
+st.sidebar.markdown("---")
+st.sidebar.caption(f"Data systemu: {datetime.now().strftime('%d-%m-%Y')}")
 
-# --- WIDOK 1: DASHBOARD ---
-if view == "Dashboard":
-    st.title("Centrum Dowodzenia UR")
+# --- WIDOK 1: PANEL GŁÓWNY ---
+if view == "Panel Główny":
+    st.subheader("Podgląd Statusu Maszyn")
     
-    # 1. Analiza stanu maszyn
-    alerts = []
+    # Logika statusów
+    alerts_critical = []
+    alerts_warning = []
     
     for idx, row in st.session_state.df.iterrows():
-        # Sprawdzanie cykli
+        # Cykle
         cycles_left = row['cycles_limit'] - row['cycles_current']
-        cycle_status = "CRITICAL" if cycles_left <= 0 else "WARNING" if cycles_left <= (row['cycles_limit']*0.2) else "OK"
+        cycle_status = 2 if cycles_left <= 0 else 1 if cycles_left <= (row['cycles_limit']*0.2) else 0
         
-        # Sprawdzanie daty przeglądu okresowego
+        # Czas
         last_fixed = str_to_date(row['last_fixed_service'])
         next_fixed = add_months(last_fixed, row['service_interval_months'])
         days_to_fixed = (next_fixed - datetime.now().date()).days
+        time_status = 2 if days_to_fixed <= 7 else 1 if days_to_fixed <= 30 else 0
         
-        time_status = "CRITICAL" if days_to_fixed <= 7 else "WARNING" if days_to_fixed <= 30 else "OK"
-        
-        # Generowanie alertów
-        if cycle_status == "CRITICAL" or time_status == "CRITICAL":
-            alerts.append({"name": row['name'], "reason": "WYMAGANY SERWIS!", "type": "critical"})
-        elif cycle_status == "WARNING" or time_status == "WARNING":
-            alerts.append({"name": row['name'], "reason": "Zbliża się termin", "type": "warning"})
+        if cycle_status == 2 or time_status == 2:
+            alerts_critical.append(f"{row['name']} - WYMAGANA INTERWENCJA")
+        elif cycle_status == 1 or time_status == 1:
+            alerts_warning.append(f"{row['name']} - Zbliża się termin")
 
-    # 2. Wyświetlanie Alertów
-    if alerts:
-        st.subheader("🚨 Alerty na dziś")
-        for alert in alerts:
-            color = "red" if alert['type'] == "critical" else "orange"
-            st.warning(f"**{alert['name']}**: {alert['reason']}", icon="⚠️")
-    else:
-        st.success("Wszystkie systemy sprawne. Brak pilnych serwisów.")
-
-    st.divider()
-
-    # 3. Kafelki Maszyn
-    st.subheader("Stan Floty")
-    cols = st.columns(3)
+    # Sekcja powiadomień
+    if alerts_critical:
+        st.error(f"PILNE ({len(alerts_critical)}): " + ", ".join(alerts_critical))
+    if alerts_warning:
+        st.warning(f"OSTRZEŻENIA ({len(alerts_warning)}): " + ", ".join(alerts_warning))
     
+    if not alerts_critical and not alerts_warning:
+        st.success("Status floty: NORMA. Brak pilnych zleceń.")
+
+    st.markdown("---")
+
+    # Lista kafelkowa
+    cols = st.columns(3)
     for idx, row in st.session_state.df.iterrows():
         col = cols[idx % 3]
         with col:
-            # Obliczenia do paska postępu
-            progress = min(row['cycles_current'] / row['cycles_limit'], 1.0)
-            status_color = "green"
-            if progress == 1.0: status_color = "red"
-            elif progress > 0.8: status_color = "orange"
-            
             with st.container(border=True):
-                st.markdown(f"### {row['name']}")
-                st.write(f"Cykle: **:{status_color}[{row['cycles_current']} / {row['cycles_limit']}]**")
+                # Nagłówek kafelka
+                st.markdown(f"#### {row['name']}")
+                
+                # Pasek postępu
+                progress = min(row['cycles_current'] / row['cycles_limit'], 1.0)
                 st.progress(progress)
                 
-                # Info o przeglądzie czasowym
+                # Dane liczbowe
+                c1, c2 = st.columns(2)
+                c1.caption("Licznik cykli")
+                c1.write(f"**{row['cycles_current']}** / {row['cycles_limit']}")
+                
+                # Obliczanie daty przeglądu
                 last_fixed = str_to_date(row['last_fixed_service'])
                 next_fixed = add_months(last_fixed, row['service_interval_months'])
-                st.caption(f"📅 Przegląd okresowy: {next_fixed}")
+                days_left = (next_fixed - datetime.now().date()).days
+                
+                c2.caption("Przegląd okresowy")
+                color = "red" if days_left < 7 else "white"
+                c2.markdown(f":{color}[{next_fixed}]")
 
-                # Szybki przycisk serwisu
-                if st.button("✅ Zgłoś Serwis", key=f"btn_serv_{idx}"):
+                st.markdown("---")
+                # Przycisk szybkiej akcji
+                if st.button("Potwierdź Serwis", key=f"quick_serv_{idx}", use_container_width=True):
                     st.session_state.df.at[idx, 'cycles_current'] = 0
                     st.session_state.df.at[idx, 'last_service_date'] = str(datetime.now().date())
-                    st.toast(f"Wykonano serwis dla {row['name']}!")
+                    st.toast(f"Zarejestrowano serwis: {row['name']}")
                     st.rerun()
 
-# --- WIDOK 2: SZCZEGÓŁY MASZYNY I KALENDARZ ---
-elif view == "Szczegóły Maszyny":
-    st.title("Szczegóły i Planowanie")
+# --- WIDOK 2: KARTA MASZYNY ---
+elif view == "Karta Maszyny":
+    st.subheader("Operacje i Planowanie")
     
-    selected_machine_name = st.selectbox("Wybierz maszynę:", st.session_state.df['name'])
+    col_select, col_empty = st.columns([1, 2])
+    with col_select:
+        selected_machine_name = st.selectbox("Wybierz urządzenie z listy:", st.session_state.df['name'])
+    
+    # Pobranie danych
     machine_row = st.session_state.df[st.session_state.df['name'] == selected_machine_name].iloc[0]
     idx = st.session_state.df[st.session_state.df['name'] == selected_machine_name].index[0]
     
-    # Metryki
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Aktualne Cykle", f"{machine_row['cycles_current']}", f"Limit: {machine_row['cycles_limit']}")
+    st.markdown("---")
+
+    # Główne metryki - styl techniczny
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Licznik Bieżący", f"{machine_row['cycles_current']}", delta=f"Limit: {machine_row['cycles_limit']}", delta_color="inverse")
     
-    days_to_service = "N/A"
+    # Obliczenia prognozy
+    days_to_service = "-"
     if machine_row['avg_daily_cycles'] > 0:
         cycles_left = machine_row['cycles_limit'] - machine_row['cycles_current']
         days_left = int(cycles_left / machine_row['avg_daily_cycles'])
         future_date = datetime.now().date() + timedelta(days=days_left)
-        days_to_service = f"za {days_left} dni ({future_date})"
+        days_to_service = f"{days_left} dni"
     
-    c2.metric("Prognoza Serwisu (Cykle)", days_to_service)
+    m2.metric("Estymacja Serwisu (Cykle)", days_to_service, f"Śr. dzienna: {machine_row['avg_daily_cycles']}")
     
     next_fixed = add_months(str_to_date(machine_row['last_fixed_service']), machine_row['service_interval_months'])
-    c3.metric("Następny Przegląd Okresowy", f"{next_fixed}")
+    m3.metric("Termin Przeglądu Okresowego", f"{next_fixed}")
 
-    st.divider()
+    st.markdown("---")
     
-    # --- PANEL STEROWANIA ---
-    st.subheader("🎮 Panel Sterowania")
+    # Panel Operacyjny
+    c_left, c_right = st.columns([1, 2])
     
-    col_input, col_cal = st.columns([1, 2])
-    
-    with col_input:
-        st.info("Dodaj wykonane cykle")
-        cycles_to_add = st.number_input("Liczba cykli", min_value=-100, max_value=1000, value=0, step=1)
-        if st.button("Zatwierdź zmianę"):
-            new_val = max(0, machine_row['cycles_current'] + cycles_to_add)
-            st.session_state.df.at[idx, 'cycles_current'] = new_val
-            st.success("Zaktualizowano stan licznika!")
-            st.rerun()
+    with c_left:
+        st.markdown("#### Rejestracja Pracy")
+        with st.container(border=True):
+            cycles_to_add = st.number_input("Wprowadź liczbę wykonanych cykli:", step=1)
+            if st.button("Zatwierdź wpis", type="primary", use_container_width=True):
+                new_val = max(0, machine_row['cycles_current'] + cycles_to_add)
+                st.session_state.df.at[idx, 'cycles_current'] = new_val
+                st.toast("Zaktualizowano stan licznika")
+                st.rerun()
+        
+        st.markdown("#### Raportowanie Serwisu")
+        with st.container(border=True):
+            if st.button("🛠️ Reset Licznika (Serwis Cykliczny)", use_container_width=True):
+                st.session_state.df.at[idx, 'cycles_current'] = 0
+                st.session_state.df.at[idx, 'last_service_date'] = str(datetime.now().date())
+                st.toast("Zresetowano licznik cykli")
+                st.rerun()
             
-        st.warning("Akcje Serwisowe")
-        if st.button("🛠️ Wykonano Serwis CYKLICZNY"):
-            st.session_state.df.at[idx, 'cycles_current'] = 0
-            st.session_state.df.at[idx, 'last_service_date'] = str(datetime.now().date())
-            st.success("Licznik wyzerowany!")
-            st.rerun()
+            st.write("") # odstęp
             
-        if st.button("📅 Wykonano Przegląd OKRESOWY"):
-            st.session_state.df.at[idx, 'last_fixed_service'] = str(datetime.now().date())
-            st.success("Data przeglądu zaktualizowana!")
-            st.rerun()
+            if st.button("📅 Potwierdzenie Przeglądu (Okresowy)", use_container_width=True):
+                st.session_state.df.at[idx, 'last_fixed_service'] = str(datetime.now().date())
+                st.toast("Zaktualizowano datę przeglądu")
+                st.rerun()
 
-    with col_cal:
-        st.subheader("📅 Kalendarz Prognoz (Najbliższe 7 dni)")
-        # Prosta symulacja kalendarza
+    with c_right:
+        st.markdown("#### Prognoza Obciążenia (7 dni)")
+        # Tabela prognoz
         forecast_data = []
         current_c = machine_row['cycles_current']
         avg = machine_row['avg_daily_cycles']
         limit = machine_row['cycles_limit']
         
-        for i in range(7):
+        for i in range(1, 8):
             day = datetime.now().date() + timedelta(days=i)
-            # Symulacja przyrostu
             predicted_cycles = current_c + (avg * i)
-            status = "🟢 OK"
-            if predicted_cycles >= limit:
-                status = "🔴 SERWIS!"
-            elif predicted_cycles >= limit * 0.8:
-                status = "🟡 Blisko"
             
-            # Czy to data przeglądu okresowego?
-            fixed_note = ""
+            status_text = "OK"
+            status_color = "" # default text color
+            
+            if predicted_cycles >= limit:
+                status_text = "WYMAGANY SERWIS"
+            elif predicted_cycles >= limit * 0.8:
+                status_text = "Ostrzeżenie"
+            
+            # Kolizja z datą przeglądu okresowego
             if day == next_fixed:
-                fixed_note = "❗ PRZEGLĄD OKRESOWY"
-                status = "🔴 SERWIS!"
+                status_text = "PRZEGLĄD OKRESOWY"
 
             forecast_data.append({
-                "Dzień": day.strftime("%A (%d.%m)"),
-                "Przewidywane Cykle": int(predicted_cycles),
-                "Status": status,
-                "Uwagi": fixed_note
+                "Data": day.strftime("%d.%m.%Y (%A)"),
+                "Symulowany stan": int(predicted_cycles),
+                "Limit": limit,
+                "Status": status_text
             })
             
-        st.dataframe(pd.DataFrame(forecast_data), use_container_width=True, hide_index=True)
+        df_forecast = pd.DataFrame(forecast_data)
+        
+        # Kolorowanie tabeli
+        def highlight_status(val):
+            color = ''
+            if 'SERWIS' in str(val) or 'PRZEGLĄD' in str(val):
+                color = 'background-color: #3d1818; color: #ff4b4b'
+            elif 'Ostrzeżenie' in str(val):
+                color = 'color: #ffa421'
+            return color
 
-# --- WIDOK 3: USTAWIENIA (Podgląd bazy) ---
-elif view == "Ustawienia":
-    st.title("Baza Danych Maszyn")
-    st.write("Tutaj możesz edytować parametry maszyn (np. limity).")
+        st.dataframe(
+            df_forecast.style.map(highlight_status, subset=['Status']),
+            use_container_width=True,
+            hide_index=True
+        )
+
+# --- WIDOK 3: BAZA DANYCH ---
+elif view == "Baza Danych":
+    st.subheader("Edycja Parametrów Maszyn")
+    st.info("Zmiany w tej tabeli wpływają bezpośrednio na funkcjonowanie systemu.")
     
-    edited_df = st.data_editor(st.session_state.df)
+    edited_df = st.data_editor(st.session_state.df, num_rows="dynamic", use_container_width=True)
     
-    if st.button("Zapisz zmiany w bazie"):
-        st.session_state.df = edited_df
-        st.success("Zapisano!")
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if st.button("Zapisz zmiany", type="primary", use_container_width=True):
+            st.session_state.df = edited_df
+            st.success("Baza danych zaktualizowana.")
